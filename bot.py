@@ -164,7 +164,7 @@ def create_account():
 # ===== بوت تيليجرام =====
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [[InlineKeyboardButton("إنشاء حساب", callback_data="new_account")]]
-    await update.message.reply_text("👋 أهلاً بك في أداة الإنشاء\n⚡ Powered by DEMAN.STORE", reply_markup=InlineKeyboardMarkup(keyboard))
+    await update.message.reply_text("👋 أهلاً بك في أداة الإنشاء\n⚡ Powered by @demanstoree", reply_markup=InlineKeyboardMarkup(keyboard))
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
