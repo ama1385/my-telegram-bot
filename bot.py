@@ -1,3 +1,5 @@
+import threading
+from flask import Flask
 import requests, random, string, time, re, asyncio
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
@@ -7,9 +9,20 @@ TOKEN = "8300059251:AAHskwndvl_iihk48fIzWdL_3STfAeu1A30"
 PASSWORD = "Create@Password11"
 PROXY_FILE = "proxy.txt"
 
+# ===== سيرفر ويب بسيط (لـ Render) =====
+app = Flask(__name__)
+
+@app.route('/')
+def home():
+    return "Bot is running! Powered by DEMAN.STORE"
+
+def run_web():
+    app.run(host='0.0.0.0', port=10000)
+
+threading.Thread(target=run_web, daemon=True).start()
+
 # ===== دوال مساعدة =====
 def load_proxy():
-    """تحميل البروكسي من ملف"""
     try:
         with open(PROXY_FILE, "r", encoding="utf-8") as f:
             proxy = f.read().strip()
@@ -20,12 +33,10 @@ def load_proxy():
     return None
 
 def random_user(length=10):
-    """توليد يوزر عشوائي"""
     chars = string.ascii_lowercase + string.digits
     return ''.join(random.choice(chars) for _ in range(length))
 
 def request_with_retry(sess, method, url, **kwargs):
-    """تنفيذ طلب مع إعادة المحاولة حتى 3 مرات"""
     for _ in range(3):
         try:
             if method == "get":
@@ -36,7 +47,7 @@ def request_with_retry(sess, method, url, **kwargs):
             time.sleep(2)
     return None
 
-# ===== البريد المؤقت =====
+# ===== البريد المؤقت (GuerrillaMail) =====
 def get_email_guerrilla(sess):
     r = request_with_retry(sess, "get", "https://api.guerrillamail.com/ajax.php?f=get_email_address")
     if not r: return None
@@ -55,6 +66,7 @@ def get_code_guerrilla(sess, sid_token):
         time.sleep(3)
     return None
 
+# ===== البريد المؤقت (Evapmail) =====
 def get_email_evp(sess):
     headers = {'User-Agent': 'Dart/3.5 (dart:io)', 'Content-Type': 'application/json'}
     json_data = {'deviceId': ''.join(random.choices(string.ascii_lowercase + string.digits, k=16)), 'expirationMinutes': 60}
@@ -77,7 +89,6 @@ def get_code_evp(sess, token):
 def create_account():
     sess = requests.Session()
 
-    # تحميل البروكسي
     proxy = load_proxy()
     if proxy:
         try:
@@ -88,7 +99,6 @@ def create_account():
     else:
         sess.proxies = {}
 
-    # جلب CSRF
     request_with_retry(sess, "get", "https://www.instagram.com/accounts/emailsignup/")
     csrftoken = sess.cookies.get_dict().get("csrftoken")
     headers = {
@@ -114,7 +124,6 @@ def create_account():
     username = random_user(12)
     machine_id = ''.join(random.choice(string.hexdigits) for _ in range(16))
 
-    # محاولة التسجيل
     request_with_retry(sess, "post", "https://www.instagram.com/api/v1/web/accounts/web_create_ajax/attempt/",
                        headers=headers,
                        data={
@@ -127,23 +136,19 @@ def create_account():
                            "opt_into_one_tap": "false",
                        })
 
-    # إرسال الكود
     request_with_retry(sess, "post", "https://www.instagram.com/api/v1/accounts/send_verify_email/",
                        headers=headers, data={"device_id": machine_id, "email": email})
 
-    # استلام الكود
     code = code_func()
     if not code:
         return None
 
-    # تحقق الكود
     resp_code = request_with_retry(sess, "post", "https://www.instagram.com/api/v1/accounts/check_confirmation_code/",
                                    headers=headers, data={"code": code, "device_id": machine_id, "email": email})
     if not resp_code or "signup_code" not in resp_code.json():
         return None
     sn = resp_code.json()["signup_code"]
 
-    # إنشاء نهائي
     resp_final = request_with_retry(sess, "post", "https://www.instagram.com/api/v1/web/accounts/web_create_ajax/",
                                     headers=headers, data={
                                         "enc_password": f"#PWD_INSTAGRAM_BROWSER:0:0:{PASSWORD}",
