@@ -1,53 +1,38 @@
-import os
-import re
-import time
-import string
-import random
-import logging
-import requests
-import asyncio
-from dotenv import load_dotenv
+import requests, random, string, time, re, asyncio
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
 
-# ===== تحميل الإعدادات =====
-load_dotenv()
-TOKEN = os.getenv("TELEGRAM_TOKEN", "8300059251:AAHskwndvl_iihk48fIzWdL_3STfAeu1A30")
-PASSWORD = os.getenv("DEFAULT_PASSWORD", "Create@Password11")
+# ===== إعدادات البوت =====
+TOKEN = "8300059251:AAHskwndvl_iihk48fIzWdL_3STfAeu1A30"
+PASSWORD = "Create@Password11"
 PROXY_FILE = "proxy.txt"
-
-# ===== إعداد اللوج =====
-logging.basicConfig(
-    filename="bot.log",
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s"
-)
 
 # ===== دوال مساعدة =====
 def load_proxy():
+    """تحميل البروكسي من ملف"""
     try:
         with open(PROXY_FILE, "r", encoding="utf-8") as f:
             proxy = f.read().strip()
             if proxy:
-                logging.info(f"Loaded proxy: {proxy}")
                 return {"http": proxy, "https": proxy}
     except FileNotFoundError:
-        logging.warning("proxy.txt not found.")
+        pass
     return None
 
 def random_user(length=10):
+    """توليد يوزر عشوائي"""
     chars = string.ascii_lowercase + string.digits
     return ''.join(random.choice(chars) for _ in range(length))
 
 def request_with_retry(sess, method, url, **kwargs):
+    """تنفيذ طلب مع إعادة المحاولة حتى 3 مرات"""
     for _ in range(3):
         try:
             if method == "get":
                 return sess.get(url, timeout=30, **kwargs)
             elif method == "post":
                 return sess.post(url, timeout=30, **kwargs)
-        except requests.exceptions.RequestException as e:
-            logging.error(f"Request failed: {e}")
+        except requests.exceptions.RequestException:
             time.sleep(2)
     return None
 
@@ -70,9 +55,29 @@ def get_code_guerrilla(sess, sid_token):
         time.sleep(3)
     return None
 
+def get_email_evp(sess):
+    headers = {'User-Agent': 'Dart/3.5 (dart:io)', 'Content-Type': 'application/json'}
+    json_data = {'deviceId': ''.join(random.choices(string.ascii_lowercase + string.digits, k=16)), 'expirationMinutes': 60}
+    r = request_with_retry(sess, "post", 'https://api.evapmail.com/v1/accounts/create', json=json_data, headers=headers)
+    if not r: return None
+    token = r.json()['token']
+    return r.json()['email'], token
+
+def get_code_evp(sess, token):
+    headers = {'User-Agent': 'Dart/3.5 (dart:io)', 'authorization': f'Bearer {token}'}
+    for _ in range(12):
+        r = request_with_retry(sess, "get", 'https://api.evapmail.com/v1/messages/inbox', headers=headers)
+        if r and 'Instagram' in r.text:
+            code = str(r.json()[0]["subject"])[:6]
+            return code
+        time.sleep(3)
+    return None
+
 # ===== إنشاء الحساب =====
-def create_account_sync():
+def create_account():
     sess = requests.Session()
+
+    # تحميل البروكسي
     proxy = load_proxy()
     if proxy:
         try:
@@ -83,6 +88,7 @@ def create_account_sync():
     else:
         sess.proxies = {}
 
+    # جلب CSRF
     request_with_retry(sess, "get", "https://www.instagram.com/accounts/emailsignup/")
     csrftoken = sess.cookies.get_dict().get("csrftoken")
     headers = {
@@ -92,15 +98,23 @@ def create_account_sync():
         "Referer": "https://www.instagram.com/accounts/emailsignup/",
     }
 
+    # تجربة GuerrillaMail أولاً
     email_data = get_email_guerrilla(sess)
-    if not email_data:
-        return None
-    email, sid_token = email_data
-    code_func = lambda: get_code_guerrilla(sess, sid_token)
+    if email_data:
+        email, sid_token = email_data
+        code_func = lambda: get_code_guerrilla(sess, sid_token)
+    else:
+        # إذا فشل، تجربة Evapmail
+        email_data = get_email_evp(sess)
+        if not email_data:
+            return None
+        email, token = email_data
+        code_func = lambda: get_code_evp(sess, token)
 
     username = random_user(12)
     machine_id = ''.join(random.choice(string.hexdigits) for _ in range(16))
 
+    # محاولة التسجيل
     request_with_retry(sess, "post", "https://www.instagram.com/api/v1/web/accounts/web_create_ajax/attempt/",
                        headers=headers,
                        data={
@@ -113,19 +127,23 @@ def create_account_sync():
                            "opt_into_one_tap": "false",
                        })
 
+    # إرسال الكود
     request_with_retry(sess, "post", "https://www.instagram.com/api/v1/accounts/send_verify_email/",
                        headers=headers, data={"device_id": machine_id, "email": email})
 
+    # استلام الكود
     code = code_func()
     if not code:
         return None
 
+    # تحقق الكود
     resp_code = request_with_retry(sess, "post", "https://www.instagram.com/api/v1/accounts/check_confirmation_code/",
                                    headers=headers, data={"code": code, "device_id": machine_id, "email": email})
     if not resp_code or "signup_code" not in resp_code.json():
         return None
     sn = resp_code.json()["signup_code"]
 
+    # إنشاء نهائي
     resp_final = request_with_retry(sess, "post", "https://www.instagram.com/api/v1/web/accounts/web_create_ajax/",
                                     headers=headers, data={
                                         "enc_password": f"#PWD_INSTAGRAM_BROWSER:0:0:{PASSWORD}",
@@ -143,23 +161,10 @@ def create_account_sync():
         return email, username, PASSWORD
     return None
 
-# ===== Async Wrapper =====
-async def create_account():
-    return await asyncio.to_thread(create_account_sync)
-
-# ===== Animated Typing Effect =====
-async def send_typing_steps(msg, steps):
-    for text, bar in steps:
-        await msg.edit_text(f"{text} {bar}\n⚡ Powered by DEMAN.STORE")
-        await asyncio.sleep(1.2)
-
 # ===== بوت تيليجرام =====
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [[InlineKeyboardButton("🆕 إنشاء حساب", callback_data="new_account")]]
-    await update.message.reply_text(
-        "👋 أهلاً بك في أداة الإنشاء\n⚡ Powered by DEMAN.STORE",
-        reply_markup=InlineKeyboardMarkup(keyboard)
-    )
+    await update.message.reply_text("👋 أهلاً بك في أداة الإنشاء\n⚡ Powered by DEMAN.STORE", reply_markup=InlineKeyboardMarkup(keyboard))
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -172,12 +177,15 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ("📨 بانتظار الكود...", "🟪🟪🟪⚪⚪ (60%)"),
             ("✅ تم التحقق من الكود...", "🟪🟪🟪🟪⚪ (80%)"),
         ]
-        await send_typing_steps(msg, steps)
+        for text, bar in steps:
+            await asyncio.sleep(1.5)
+            await msg.edit_text(f"{text} {bar}\n⚡ Powered by DEMAN.STORE")
 
-        result = await create_account()
+        result = create_account()
         if result:
             email, username, password = result
             keyboard = [[InlineKeyboardButton("➕ إنشاء حساب آخر", callback_data="new_account")]]
+            await asyncio.sleep(1)
             await msg.edit_text(
                 f"🎉 الحساب جاهز! 🟪🟪🟪🟪🟪 (100%)\n\n"
                 f"📧 Email: `{email}`\n"
@@ -194,7 +202,6 @@ def main():
     app = Application.builder().token(TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CallbackQueryHandler(button_handler))
-    logging.info("Bot started.")
     app.run_polling()
 
 if __name__ == "__main__":
