@@ -86,7 +86,11 @@ def get_code_evp(sess, token):
     return None
 
 # ===== إنشاء الحساب =====
-def create_account():
+async def create_account():
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(None, sync_create_account)
+
+def sync_create_account():
     sess = requests.Session()
 
     proxy = load_proxy()
@@ -108,13 +112,11 @@ def create_account():
         "Referer": "https://www.instagram.com/accounts/emailsignup/",
     }
 
-    # تجربة GuerrillaMail أولاً
     email_data = get_email_guerrilla(sess)
     if email_data:
         email, sid_token = email_data
         code_func = lambda: get_code_guerrilla(sess, sid_token)
     else:
-        # إذا فشل، تجربة Evapmail
         email_data = get_email_evp(sess)
         if not email_data:
             return None
@@ -169,28 +171,37 @@ def create_account():
 # ===== بوت تيليجرام =====
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [[InlineKeyboardButton("إنشاء حساب", callback_data="new_account")]]
-    await update.message.reply_text("👋 أهلاً بك في أداة الإنشاء\n⚡ Powered by @demanstoree", reply_markup=InlineKeyboardMarkup(keyboard))
+    await update.message.reply_text("👋 أهلاً بك في أداة الإنشاء\n⚡ Powered by DEMAN.STORE", reply_markup=InlineKeyboardMarkup(keyboard))
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
 
     if query.data == "new_account":
-        msg = await query.message.reply_text(f"⏳ بدء الإنشاء... 🟪⚪⚪⚪⚪ (20%)\n⚡ Powered by @demanstoree")
-        steps = [
-            ("📧 البريد جاهز...", "🟪🟪⚪⚪⚪ (40%)"),
-            ("📨 بانتظار الكود...", "🟪🟪🟪⚪⚪ (60%)"),
-            ("✅ تم التحقق من الكود...", "🟪🟪🟪🟪⚪ (80%)"),
-        ]
-        for text, bar in steps:
-            await asyncio.sleep(1.5)
-            await msg.edit_text(f"{text} {bar}\n⚡ Powered by DEMAN.STORE")
+        msg = await query.message.reply_text("⏳ بدء الإنشاء... 🟪⚪⚪⚪⚪ (20%)\n⚡ Powered by DEMAN.STORE")
 
-        result = create_account()
+        steps = [
+            ("📧 تجهيز البريد", 40),
+            ("📨 بانتظار الكود", 60),
+            ("✅ التحقق من الكود", 80),
+        ]
+        for text, percent in steps:
+            for dots in [".", "..", "..."]:
+                await asyncio.sleep(0.7)
+                bar = "🟪" * (percent // 20) + "⚪" * (5 - percent // 20)
+                await msg.edit_text(f"{text}{dots} {bar} ({percent}%)\n⚡ Powered by DEMAN.STORE")
+
+        await msg.edit_text("📤 جاري إرسال البيانات... (3)")
+        await asyncio.sleep(1)
+        await msg.edit_text("📤 جاري إرسال البيانات... (2)")
+        await asyncio.sleep(1)
+        await msg.edit_text("📤 جاري إرسال البيانات... (1)")
+        await asyncio.sleep(1)
+
+        result = await create_account()
         if result:
             email, username, password = result
             keyboard = [[InlineKeyboardButton("➕ إنشاء حساب آخر", callback_data="new_account")]]
-            await asyncio.sleep(1)
             await msg.edit_text(
                 f"🎉 الحساب جاهز! 🟪🟪🟪🟪🟪 (100%)\n\n"
                 f"📧 Email: `{email}`\n"
@@ -204,10 +215,10 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ===== تشغيل البوت =====
 def main():
-    app = Application.builder().token(TOKEN).build()
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CallbackQueryHandler(button_handler))
-    app.run_polling()
+    app_telegram = Application.builder().token(TOKEN).build()
+    app_telegram.add_handler(CommandHandler("start", start))
+    app_telegram.add_handler(CallbackQueryHandler(button_handler))
+    app_telegram.run_polling()
 
 if __name__ == "__main__":
     main()
