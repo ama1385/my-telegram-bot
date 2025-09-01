@@ -42,6 +42,7 @@ def get_email_guerrilla(sess):
     if not r:
         return None, None
     data = r.json()
+    print(f"[DEBUG] Email: {data['email_addr']}, Token: {data['sid_token']}")  # <-- أضف هذا السطر
     return data["email_addr"], data["sid_token"]
 
 def get_code_guerrilla(sess, sid_token):
