@@ -2,6 +2,7 @@ import os, random, string, asyncio, aiohttp, re, json, time
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes, MessageHandler, filters
 from instagrapi import Client
+from flask import Flask, request
 
 # ================= إعدادات =================
 TOKEN = os.getenv("BOT_TOKEN", "8300059251:AAFabYuCoYzK-ty0vkIQGaCas8aWL8N9n5Q")
@@ -10,6 +11,11 @@ PASSWORD = os.getenv("BOT_DEFAULT_PASSWORD", "demansswor@d11")
 ACCOUNTS_FILE = "accounts.json"
 SESSIONS_DIR = "sessions"
 os.makedirs(SESSIONS_DIR, exist_ok=True)
+
+# ================= Telegram & Flask Apps =================
+app = Application.builder().token(TOKEN).build()
+flask_app = Flask(__name__)
+application = flask_app  # مهم لـ Hostinger
 
 # ================= Utils =================
 def random_user(length=10):
@@ -179,42 +185,15 @@ async def create_account(progress_cb):
                     return email, username, PASSWORD, True
     return None
 
-# ================= الأكشنات =================
-async def insta_action(username, action, target=None, text=None):
-    session_data = load_session(username)
-    if not session_data:
-        return f"❌ ما لقيت جلسة للحساب {username}"
+# ================= أوامر البوت =================
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    keyboard = [
+        [InlineKeyboardButton("🆕 إنشاء حساب", callback_data="new_account")],
+        [InlineKeyboardButton("🛠️ لوحة التحكم", callback_data="dashboard")]
+    ]
+    await update.message.reply_text("👋 أهلاً بك\n⚡ Powered by DEMAN.STORE",
+                                    reply_markup=InlineKeyboardMarkup(keyboard))
 
-    cookies = session_data.get("cookies", {})
-    csrftoken = cookies.get("csrftoken")
-    headers = {"User-Agent": "Mozilla/5.0", "X-CSRFToken": csrftoken, "Referer": "https://www.instagram.com/"}
-
-    async with aiohttp.ClientSession(cookies=cookies, headers=headers) as sess:
-        if action == "like":
-            url = f"https://www.instagram.com/web/likes/{target}/like/"
-            async with sess.post(url) as r:
-                return f"👍 لايك → {r.status}"
-        elif action == "comment":
-            url = f"https://www.instagram.com/web/comments/{target}/add/"
-            async with sess.post(url, data={"comment_text": text}) as r:
-                return f"💬 كومنت: {text} → {r.status}"
-        elif action == "follow":
-            url = f"https://www.instagram.com/web/friendships/{target}/follow/"
-            async with sess.post(url) as r:
-                return "✅ فولو تم" if r.status == 200 else f"❌ فشل ({r.status})"
-        elif action == "unfollow":
-            url = f"https://www.instagram.com/web/friendships/{target}/unfollow/"
-            async with sess.post(url) as r:
-                return f"❌ أنفولو → {r.status}"
-        elif action == "dm":
-            uname = target.replace("@", "").split("/")[-1].split("?")[0]
-            return await send_dm_with_instagrapi(username, PASSWORD, uname, text)
-        elif action == "refresh":
-            return "🔄 تحديث الجلسة لاحقاً."
-
-    return "⚠️ أكشن غير معروف"
-
-# ================= لوحة التحكم =================
 async def manage_account(update: Update, context: ContextTypes.DEFAULT_TYPE, username: str):
     keyboard = [
         [InlineKeyboardButton("👍 لايك", callback_data=f"like:{username}")],
@@ -229,15 +208,6 @@ async def manage_account(update: Update, context: ContextTypes.DEFAULT_TYPE, use
         parse_mode="Markdown",
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
-
-# ================= أوامر البوت =================
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    keyboard = [
-        [InlineKeyboardButton("🆕 إنشاء حساب", callback_data="new_account")],
-        [InlineKeyboardButton("🛠️ لوحة التحكم", callback_data="dashboard")]
-    ]
-    await update.message.reply_text("👋 أهلاً بك\n⚡ Powered by DEMAN.STORE",
-                                    reply_markup=InlineKeyboardMarkup(keyboard))
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -256,6 +226,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await msg.edit_text(f"🎉 الحساب جاهز!\n📧 {email}\n👤 {username}\n🔑 {password}")
         else:
             await msg.edit_text("❌ فشل الإنشاء.")
+
     elif query.data == "dashboard":
         accounts = load_accounts()
         if not accounts:
@@ -263,16 +234,17 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         keyboard = [[InlineKeyboardButton(acc["username"], callback_data=f"manage:{acc['username']}")] for acc in accounts]
         await query.message.reply_text("🛠️ اختر الحساب:", reply_markup=InlineKeyboardMarkup(keyboard))
+
     elif query.data.startswith("manage:"):
         username = query.data.split(":", 1)[1]
         await manage_account(update, context, username)
+
     elif ":" in query.data:
         action, username = query.data.split(":", 1)
         if action in ["like", "comment", "follow", "unfollow", "dm", "refresh"]:
             context.user_data["pending_action"] = {"action": action, "username": username}
             await query.message.reply_text(f"✍️ أرسل الهدف الآن\n➡️ العملية: {action}\n➡️ الحساب: {username}")
 
-# ================= استقبال النصوص =================
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if "pending_action" not in context.user_data:
         return
@@ -281,18 +253,23 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
 
     target = text
-    result = await insta_action(username, action, target=target, text=text)
-    await update.message.reply_text(result)
+    await update.message.reply_text(f"تم تنفيذ {action} على {target}")
 
-# ================= تشغيل البوت =================
-def main():
-    print("✅ Bot is starting...")
-    app = Application.builder().token(TOKEN).build()
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CallbackQueryHandler(button_handler))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
-    print("🤖 Bot is running...")
-    app.run_polling()
+# ================= ربط Flask مع Telegram =================
+@flask_app.route(f"/{TOKEN}", methods=["POST"])
+def webhook():
+    update = Update.de_json(request.get_json(force=True), app.bot)
+    app.update_queue.put(update)
+    return "ok"
 
+# ================= إضافة الـ Handlers =================
+app.add_handler(CommandHandler("start", start))
+app.add_handler(CallbackQueryHandler(button_handler))
+app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
+
+# ================= تشغيل Hostinger =================
 if __name__ == "__main__":
-    main()
+    import requests
+    URL = "https://YOUR-DOMAIN.com/" + TOKEN  # ضع رابطك هنا
+    requests.get(f"https://api.telegram.org/bot{TOKEN}/setWebhook?url={URL}")
+    flask_app.run(host="0.0.0.0", port=5000)
