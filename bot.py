@@ -87,14 +87,19 @@ async def insta_login(username, password):
 
 # ================= إنشاء الحساب =================
 async def create_account(progress_cb):
+    await progress_cb("🔄 بدء إنشاء الحساب...", 10)
+
     username = random_user(8)
     machine_id = ''.join(random.choice(string.hexdigits) for _ in range(16))
 
     sess = requests.Session()
+
+    await progress_cb("📡 جلب البريد المؤقت...", 15)
     email, token = get_email_guerrilla(sess)
     if not email:
+        await progress_cb("❌ فشل جلب البريد", 100)
         return None
-    await progress_cb(f"📧 البريد: {email}", 30)
+    await progress_cb(f"📧 البريد: {email}", 25)
 
     headers = {
         "User-Agent": "Mozilla/5.0",
@@ -103,12 +108,15 @@ async def create_account(progress_cb):
         "Content-Type": "application/x-www-form-urlencoded"
     }
 
+    await progress_cb("🌐 فتح صفحة التسجيل...", 30)
     r = request_with_retry(sess, "get", "https://www.instagram.com/accounts/emailsignup/")
     csrftoken = r.cookies.get("csrftoken")
     if not csrftoken:
+        await progress_cb("❌ فشل في الحصول على CSRF", 100)
         return None
     sess.headers.update({"X-CSRFToken": csrftoken})
 
+    await progress_cb("📝 إرسال بيانات التسجيل...", 35)
     request_with_retry(sess, "post",
                        "https://www.instagram.com/api/v1/web/accounts/web_create_ajax/attempt/", data={
         "email": email,
@@ -118,23 +126,28 @@ async def create_account(progress_cb):
         "client_id": machine_id,
     })
 
+    await progress_cb("📨 إرسال كود التفعيل للبريد...", 45)
     request_with_retry(sess, "post", "https://www.instagram.com/api/v1/accounts/send_verify_email/",
                        data={"device_id": machine_id, "email": email})
-    await progress_cb("📨 تم إرسال الكود للبريد...", 50)
 
+    await progress_cb("⏳ ننتظر كود التفعيل...", 55)
     code = get_code_guerrilla(sess, token)
     if not code:
+        await progress_cb("❌ لم يصل كود التفعيل", 100)
         return None
     await progress_cb(f"✅ الكود: {code}", 70)
 
+    await progress_cb("🔐 التحقق من الكود...", 75)
     r = request_with_retry(sess, "post",
                            "https://www.instagram.com/api/v1/accounts/check_confirmation_code/",
                            data={"code": code, "device_id": machine_id, "email": email})
     data = r.json()
     if "signup_code" not in data:
+        await progress_cb("❌ فشل في تأكيد الكود", 100)
         return None
     sn = data["signup_code"]
 
+    await progress_cb("✅ محاولة إنشاء الحساب...", 85)
     r = request_with_retry(sess, "post", "https://www.instagram.com/api/v1/web/accounts/web_create_ajax/", data={
         "email": email,
         "username": username,
@@ -147,10 +160,17 @@ async def create_account(progress_cb):
     })
 
     if r.json().get("account_created"):
+        await progress_cb("🔐 تسجيل دخول...", 90)
         ok, cookies = await insta_login(username, PASSWORD)
         if ok:
             save_account(email, username, PASSWORD, cookies)
+            await progress_cb("🎉 الحساب تم بنجاح", 100)
             return email, username, PASSWORD, True
+        else:
+            await progress_cb("❌ فشل تسجيل الدخول بعد الإنشاء", 100)
+            return None
+
+    await progress_cb("❌ فشل إنشاء الحساب في Instagram", 100)
     return None
 
 # ================= Telegram Bot =================
