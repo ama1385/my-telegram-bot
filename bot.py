@@ -4,7 +4,7 @@ from telegram.ext import Application, CommandHandler, CallbackQueryHandler, Cont
 from instagrapi import Client
 
 # ================= إعدادات =================
-TOKEN = os.getenv("BOT_TOKEN", "8300059251:AAHskwndvl_iihk48fIzWdL_3STfAeu1A30")
+TOKEN = os.getenv("BOT_TOKEN", "8300059251:AAFabYuCoYzK-ty0vkIQGaCas8aWL8N9n5Q")
 PASSWORD = os.getenv("BOT_DEFAULT_PASSWORD", "demansswor@d11")
 
 ACCOUNTS_FILE = "accounts.json"
