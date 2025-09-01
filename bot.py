@@ -2,7 +2,6 @@ import os, random, string, asyncio, aiohttp, re, json, time
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes, MessageHandler, filters
 from instagrapi import Client
-from flask import Flask, request
 
 # ================= إعدادات =================
 TOKEN = os.getenv("BOT_TOKEN", "8300059251:AAFabYuCoYzK-ty0vkIQGaCas8aWL8N9n5Q")
@@ -11,11 +10,6 @@ PASSWORD = os.getenv("BOT_DEFAULT_PASSWORD", "demansswor@d11")
 ACCOUNTS_FILE = "accounts.json"
 SESSIONS_DIR = "sessions"
 os.makedirs(SESSIONS_DIR, exist_ok=True)
-
-# ================= Telegram & Flask Apps =================
-app = Application.builder().token(TOKEN).build()
-flask_app = Flask(__name__)
-application = flask_app  # مهم لـ Hostinger
 
 # ================= Utils =================
 def random_user(length=10):
@@ -255,21 +249,14 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     target = text
     await update.message.reply_text(f"تم تنفيذ {action} على {target}")
 
-# ================= ربط Flask مع Telegram =================
-@flask_app.route(f"/{TOKEN}", methods=["POST"])
-def webhook():
-    update = Update.de_json(request.get_json(force=True), app.bot)
-    app.update_queue.put(update)
-    return "ok"
+# ================= تشغيل البوت بـ Polling =================
+def main():
+    app = Application.builder().token(TOKEN).build()
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CallbackQueryHandler(button_handler))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
+    print("✅ البوت شغال الآن...")
+    app.run_polling()
 
-# ================= إضافة الـ Handlers =================
-app.add_handler(CommandHandler("start", start))
-app.add_handler(CallbackQueryHandler(button_handler))
-app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
-
-# ================= تشغيل Hostinger =================
 if __name__ == "__main__":
-    import requests
-    URL = "https://YOUR-DOMAIN.com/" + TOKEN  # ضع رابطك هنا
-    requests.get(f"https://api.telegram.org/bot{TOKEN}/setWebhook?url={URL}")
-    flask_app.run(host="0.0.0.0", port=5000)
+    main()
