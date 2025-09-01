@@ -2,7 +2,7 @@ import os, random, string, asyncio, aiohttp, re, json, time
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
 import requests
-
+print("🔥 DEMAN Bot Started 🔥")
 # ================= إعدادات =================
 TOKEN = os.getenv("BOT_TOKEN", "8300059251:AAFabYuCoYzK-ty0vkIQGaCas8aWL8N9n5Q")
 PASSWORD = os.getenv("BOT_DEFAULT_PASSWORD", "demansswor@d11")
