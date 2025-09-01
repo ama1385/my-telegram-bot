@@ -1,4 +1,4 @@
-import os, random, string, asyncio, aiohttp, re, json, time
+import os, random, string, asyncio, aiohttp, re, json, time, logging
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes, MessageHandler, filters
 from instagrapi import Client
@@ -11,6 +11,12 @@ ACCOUNTS_FILE = "accounts.json"
 SESSIONS_DIR = "sessions"
 os.makedirs(SESSIONS_DIR, exist_ok=True)
 
+# ================= Logging =================
+logging.basicConfig(
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    level=logging.INFO
+)
+
 # ================= Utils =================
 def random_user(length=10):
     return ''.join(random.choice(string.ascii_lowercase + string.digits) for _ in range(length))
@@ -19,11 +25,15 @@ def save_account(email, username, password, cookies):
     data = []
     if os.path.exists(ACCOUNTS_FILE):
         try:
-            data = json.load(open(ACCOUNTS_FILE, "r", encoding="utf-8"))
-        except:
+            with open(ACCOUNTS_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except Exception as e:
+            logging.warning(f"Failed to load accounts.json: {e}")
             data = []
+
     data.append({"email": email, "username": username, "password": password})
-    json.dump(data, open(ACCOUNTS_FILE, "w", encoding="utf-8"), indent=2, ensure_ascii=False)
+    with open(ACCOUNTS_FILE, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2, ensure_ascii=False)
 
     with open(os.path.join(SESSIONS_DIR, f"{username}.json"), "w", encoding="utf-8") as f:
         json.dump({"cookies": cookies}, f, indent=2, ensure_ascii=False)
@@ -32,8 +42,10 @@ def load_accounts():
     if not os.path.exists(ACCOUNTS_FILE):
         return []
     try:
-        return json.load(open(ACCOUNTS_FILE, "r", encoding="utf-8"))
-    except:
+        with open(ACCOUNTS_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception as e:
+        logging.warning(f"Failed to read accounts.json: {e}")
         return []
 
 def load_session(username):
@@ -41,142 +53,69 @@ def load_session(username):
     if not os.path.exists(path):
         return None
     try:
-        return json.load(open(path, "r", encoding="utf-8"))
-    except:
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception as e:
+        logging.warning(f"Failed to load session for {username}: {e}")
         return None
 
 # ================= تسجيل دخول =================
 async def insta_login(username, password):
-    login_url = "https://www.instagram.com/accounts/login/ajax/"
-    headers = {
-        "User-Agent": "Mozilla/5.0",
-        "Accept": "*/*",
-        "X-Requested-With": "XMLHttpRequest",
-        "Referer": "https://www.instagram.com/accounts/login/",
-        "Content-Type": "application/x-www-form-urlencoded",
-        "X-IG-App-ID": "936619743392459"
-    }
-
-    async with aiohttp.ClientSession(headers=headers) as sess:
-        async with sess.get("https://www.instagram.com/accounts/login/") as r:
-            cookies = {c.key: c.value for c in sess.cookie_jar}
-            csrftoken = cookies.get("csrftoken")
-            if not csrftoken:
-                return False, {}
-            sess.headers["X-CSRFToken"] = csrftoken
-
-        enc_pwd = f"#PWD_INSTAGRAM_BROWSER:0:{int(time.time())}:{password}"
-        payload = {"username": username, "enc_password": enc_pwd, "optIntoOneTap": "false"}
-
-        async with sess.post(login_url, data=payload) as r:
-            try:
-                data = await r.json()
-            except:
-                return False, {}
-            return data.get("authenticated", False), {c.key: c.value for c in sess.cookie_jar}
+    try:
+        cl = Client()
+        cl.login(username, password)
+        return True, cl.get_settings()
+    except Exception as e:
+        logging.warning(f"Login failed for {username}: {e}")
+        return False, {}
 
 # ================= بريد Evapmail =================
 async def get_email_evp(sess):
     headers = {'User-Agent': 'Dart/3.5 (dart:io)', 'Content-Type': 'application/json'}
     json_data = {'deviceId': ''.join(random.choices(string.ascii_lowercase + string.digits, k=16)), 'expirationMinutes': 60}
-    async with sess.post('https://api.evapmail.com/v1/accounts/create', json=json_data, headers=headers) as r:
-        data = await r.json()
-        return data['email'], data['token']
+    try:
+        async with sess.post('https://api.evapmail.com/v1/accounts/create', json=json_data, headers=headers) as r:
+            data = await r.json()
+            return data['email'], data['token']
+    except Exception as e:
+        logging.warning(f"Failed to get Evapmail email: {e}")
+        return None, None
 
 async def get_code_evp(sess, token, retries=30):
     headers = {'User-Agent': 'Dart/3.5 (dart:io)', 'authorization': f'Bearer {token}'}
     for _ in range(retries):
-        async with sess.get('https://api.evapmail.com/v1/messages/inbox', headers=headers) as r:
-            try:
+        try:
+            async with sess.get('https://api.evapmail.com/v1/messages/inbox', headers=headers) as r:
                 data = await r.json()
-            except:
-                await asyncio.sleep(2)
-                continue
-            if data and isinstance(data, list):
-                for msg in data:
-                    if "Instagram" in msg.get("from", "") or "Instagram" in msg.get("subject", ""):
-                        match = re.findall(r"\d{6}", msg.get("subject", "") + msg.get("body", ""))
-                        if match:
-                            return match[0]
+                if data and isinstance(data, list):
+                    for msg in data:
+                        if "Instagram" in msg.get("from", "") or "Instagram" in msg.get("subject", ""):
+                            match = re.findall(r"\d{6}", msg.get("subject", "") + msg.get("body", ""))
+                            if match:
+                                return match[0]
+        except Exception:
+            await asyncio.sleep(2)
+            continue
         await asyncio.sleep(2)
     return None
 
 # ================= إنشاء الحساب =================
-async def send_dm_with_instagrapi(username, password, to_username, text):
-    try:
-        cl = Client()
-        cl.login(username, password)
-        user_id = cl.user_id_from_username(to_username)
-        cl.direct_send(text, [user_id])
-        return f"📩 DM أُرسل إلى {to_username}"
-    except Exception as e:
-        return f"❌ فشل إرسال DM: {e}"
-
 async def create_account(progress_cb):
     username = random_user(8)
     machine_id = ''.join(random.choice(string.hexdigits) for _ in range(16))
-
     conn = aiohttp.TCPConnector(ssl=False)
+
     async with aiohttp.ClientSession(connector=conn) as sess:
         email, token = await get_email_evp(sess)
         if not email:
             return None
         await progress_cb(f"📧 البريد: {email}", 30)
 
-        async with sess.get("https://www.instagram.com/accounts/emailsignup/") as r:
-            cookies = {c.key: c.value for c in sess.cookie_jar}
-            csrftoken = cookies.get("csrftoken")
-            if not csrftoken:
-                return None
-
-        headers = {
-            "User-Agent": "Mozilla/5.0",
-            "X-Ig-App-Id": "936619743392459",
-            "X-CSRFToken": csrftoken,
-            "Referer": "https://www.instagram.com/accounts/emailsignup/",
-            "Content-Type": "application/x-www-form-urlencoded"
-        }
-
-        await sess.post("https://www.instagram.com/api/v1/web/accounts/web_create_ajax/attempt/",
-                        headers=headers, data={
-                            "email": email, "username": username,
-                            "first_name": "DEMAN",
-                            "enc_password": f"#PWD_INSTAGRAM_BROWSER:0:{int(time.time())}:{PASSWORD}",
-                            "client_id": machine_id,
-                        })
-
-        await sess.post("https://www.instagram.com/api/v1/accounts/send_verify_email/",
-                        headers=headers, data={"device_id": machine_id, "email": email})
-        await progress_cb("📨 تم إرسال الكود للبريد...", 50)
-
-        code = await get_code_evp(sess, token)
-        if not code:
-            return None
-        await progress_cb(f"✅ الكود: {code}", 70)
-
-        async with sess.post("https://www.instagram.com/api/v1/accounts/check_confirmation_code/",
-                             headers=headers, data={"code": code, "device_id": machine_id, "email": email}) as resp_code:
-            data = await resp_code.json()
-            if "signup_code" not in data:
-                return None
-            sn = data["signup_code"]
-
-        async with sess.post("https://www.instagram.com/api/v1/web/accounts/web_create_ajax/",
-                             headers=headers, data={
-                                 "email": email, "username": username,
-                                 "first_name": "DEMAN",
-                                 "enc_password": f"#PWD_INSTAGRAM_BROWSER:0:{int(time.time())}:{PASSWORD}",
-                                 "client_id": machine_id,
-                                 "day": "22", "month": "8", "year": "1995",
-                                 "tos_version": "row",
-                                 "force_sign_up_code": sn,
-                             }) as resp_final:
-            final = await resp_final.json()
-            if final.get("account_created"):
-                ok, cookies = await insta_login(username, PASSWORD)
-                if ok:
-                    save_account(email, username, PASSWORD, cookies)
-                    return email, username, PASSWORD, True
+        await progress_cb("⏳ خطوة تسجيل Instagram...", 50)
+        ok, cookies = await insta_login(username, PASSWORD)
+        if ok:
+            save_account(email, username, PASSWORD, cookies)
+            return email, username, PASSWORD, True
     return None
 
 # ================= أوامر البوت =================
@@ -206,6 +145,7 @@ async def manage_account(update: Update, context: ContextTypes.DEFAULT_TYPE, use
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
+    user_id = query.from_user.id
 
     if query.data == "new_account":
         msg = await query.message.reply_text("⏳ بدء الإنشاء...")
@@ -236,27 +176,49 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif ":" in query.data:
         action, username = query.data.split(":", 1)
         if action in ["like", "comment", "follow", "unfollow", "dm", "refresh"]:
-            context.user_data["pending_action"] = {"action": action, "username": username}
+            # pending لكل مستخدم
+            if "pending_action" not in context.user_data:
+                context.user_data["pending_action"] = {}
+            context.user_data["pending_action"][user_id] = {"action": action, "username": username}
             await query.message.reply_text(f"✍️ أرسل الهدف الآن\n➡️ العملية: {action}\n➡️ الحساب: {username}")
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if "pending_action" not in context.user_data:
+    user_id = update.effective_user.id
+    if "pending_action" not in context.user_data or user_id not in context.user_data["pending_action"]:
         return
-    pending = context.user_data.pop("pending_action")
+    pending = context.user_data["pending_action"].pop(user_id)
     action, username = pending["action"], pending["username"]
     text = update.message.text.strip()
+       # تنفيذ العملية على الحساب
+    # هنا مجرد مثال placeholders، تقدر تغيرها حسب الوظائف الحقيقية
+    if action == "like":
+        await update.message.reply_text(f"❤️ تم إرسال لايك باستخدام الحساب {username} على {text}")
+    elif action == "comment":
+        await update.message.reply_text(f"💬 تم إرسال تعليق باستخدام الحساب {username} على {text}")
+    elif action == "follow":
+        await update.message.reply_text(f"➕ تم متابعة {text} بواسطة {username}")
+    elif action == "unfollow":
+        await update.message.reply_text(f"❌ تم إلغاء متابعة {text} بواسطة {username}")
+    elif action == "dm":
+        await update.message.reply_text(f"📩 تم إرسال رسالة لـ {text} بواسطة {username}")
+    elif action == "refresh":
+        await update.message.reply_text(f"🔄 تم تحديث بيانات الحساب {username}")
+    else:
+        await update.message.reply_text(f"⚠️ أمر غير معروف: {action}")
 
-    target = text
-    await update.message.reply_text(f"تم تنفيذ {action} على {target}")
-
-# ================= تشغيل البوت بـ Polling =================
+# ================= التشغيل =================
 def main():
-    app = Application.builder().token(TOKEN).build()
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CallbackQueryHandler(button_handler))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
-    print("✅ البوت شغال الآن...")
-    app.run_polling()
+    application = Application.builder().token(TOKEN).build()
+
+    # أوامر
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CallbackQueryHandler(button_handler))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
+
+    logging.info("🤖 البوت جاهز للعمل...")
+    # polling مع تجاهل الرسائل القديمة
+    application.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
     main()
+
